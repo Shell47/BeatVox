@@ -1,6 +1,8 @@
 /*
 
   Created by Beat707 (c) 2011 - http://www.Beat707.com
+  
+  The code uses the MIDI Shield: http://www.ruggedcircuits.com/html/flexible_midi_shield.html
 
 */
 
@@ -11,21 +13,28 @@
 #include "PCM_Sound.h"
 
 // ======================================================================================= //
+#define TEST_LOOP_PATTERN 0  // Debug Only - Adds a small loop pattern to test the code
+#define SHOWFREEMEM 0        // Debug Only - Prints on the Serial output the current RAM left
+#define BUTTON_PIN 8         // General-purpose digital input pin (active low)
+#define ANALOG_PIN 0         // General-purpose potentiometer input
+#define MIDIchannel 9        // Regular MIDI Channel - 1 (0 to 15)
 #define MIDIactivityPin 13
-#define BUTTON_PIN 8 // General-purpose digital input pin (active low)
-#define ANALOG_PIN  0 // General-purpose potentiometer input
-#define SHOWFREEMEM 0
 #define MAXVOICES 6
+#if defined(__AVR_ATmega1280__) || defined(__AVR_ATmega2560__)
+#  define MIDI_EN 57     // PF3 = 57
+#else
+#  define MIDI_EN 17
+#endif
 unsigned long MIDIactivityMillis = millis()+25;
 byte MIDIactivity = 0;
 unsigned int sampleLen[MAXVOICES];
-int samplePos[MAXVOICES][2]; // tune/fine //
+int samplePos[MAXVOICES][2];  // tune/fine
+char rate[MAXVOICES][2];      // tune/fine
+unsigned char noteVelMatrix[6][242];  // This is used to add Velocity without doing any heavy processing divisions (but also uses most of the RAM)
 unsigned char* samplePCM[MAXVOICES];
 unsigned int mixer[2] = {363,363};
 unsigned char voice = 0;
-char rate[MAXVOICES][2]; // tune/fine //
 unsigned char notevel[MAXVOICES];
-unsigned char noteVelMatrix[6][242]; // This is used to add Velocity without doing any heavy processing divisions //
 byte incomingByte;
 byte note;
 byte noteOn = 0;
@@ -33,29 +42,7 @@ byte state = 0;
 byte sound = 0;
 boolean flipFlop = false;
 boolean isReverse = false;
-
-// ======================================================================================= //
-// Checks the RAM left - the ATmega328 has only 2K of RAM //
-#if SHOWFREEMEM
-  extern unsigned int __data_start;
-  extern unsigned int __data_end;
-  extern unsigned int __bss_start;
-  extern unsigned int __bss_end;
-  extern unsigned int __heap_start;
-  extern void *__brkval;
-  
-  int freeMemory()
-  {
-    int free_memory;
-  
-    if((int)__brkval == 0)
-       free_memory = ((int)&free_memory) - ((int)&__bss_end);
-    else
-      free_memory = ((int)&free_memory) - ((int)__brkval);
-  
-    return free_memory;
-  }
-#endif
+int freeMemory();
 
 // ======================================================================================= //
 void setup()
@@ -99,7 +86,6 @@ void setup()
     pinMode(BUTTON_PIN,INPUT);
     digitalWrite(BUTTON_PIN,HIGH);
     pinMode(ANALOG_PIN,INPUT);
-    
     pinMode(MIDIactivityPin,OUTPUT);
     digitalWrite(MIDIactivityPin,LOW);
     
@@ -133,7 +119,8 @@ void setup()
     #endif
   
     // MIDI Startup //
-    Serial.begin(31250);    
+    Serial.begin(31250);
+    pinMode(MIDI_EN, OUTPUT); digitalWrite(MIDI_EN, HIGH);
 }
 
 // ======================================================================================= //
@@ -192,37 +179,39 @@ void checkInterface(void)
 // ======================================================================================= //
 void loop()
 {
-  checkInterface();
-  if (flipFlop) playNote(62, 127); else playNote(63, 127);
-  delay(40);
-  checkInterface();
-  if (flipFlop) playNote(62, 60); else playNote(63, 60);
-  delay(40);
-  checkInterface();
-  if (flipFlop) playNote(62, 40); else playNote(63, 40);
-  delay(40);
-  
-  checkInterface();
-  if (flipFlop) playNote(62, 20); else playNote(63, 20);
-  checkInterface();
-  if (flipFlop) playNote(61, 127); else playNote(60, 127);
-  delay(60);
-  checkInterface();
-  if (flipFlop) playNote(61, 40); else playNote(60, 40);
-  delay(60);
-  checkInterface();
-  
-  checkInterface();
-  if (flipFlop) playNote(66, 127); else playNote(65, 127);
-  if (flipFlop) playNote(64, 40); playNote(67, 40); 
-  delay(40);
-  checkInterface();
-  if (flipFlop) playNote(66, 60); else playNote(65, 60);
-  if (flipFlop) playNote(64, 20); playNote(67, 20); 
-  delay(40);
-  checkInterface();
-  if (flipFlop) playNote(66, 40); else playNote(65, 40);
-  delay(40);
+  #if TEST_LOOP_PATTERN
+    checkInterface();
+    if (flipFlop) playNote(62, 127); else playNote(63, 127);
+    delay(40);
+    checkInterface();
+    if (flipFlop) playNote(62, 60); else playNote(63, 60);
+    delay(40);
+    checkInterface();
+    if (flipFlop) playNote(62, 40); else playNote(63, 40);
+    delay(40);
+    
+    checkInterface();
+    if (flipFlop) playNote(62, 20); else playNote(63, 20);
+    checkInterface();
+    if (flipFlop) playNote(61, 127); else playNote(60, 127);
+    delay(60);
+    checkInterface();
+    if (flipFlop) playNote(61, 40); else playNote(60, 40);
+    delay(60);
+    checkInterface();
+    
+    checkInterface();
+    if (flipFlop) playNote(66, 127); else playNote(65, 127);
+    if (flipFlop) playNote(64, 40); playNote(67, 40); 
+    delay(40);
+    checkInterface();
+    if (flipFlop) playNote(66, 60); else playNote(65, 60);
+    if (flipFlop) playNote(64, 20); playNote(67, 20); 
+    delay(40);
+    checkInterface();
+    if (flipFlop) playNote(66, 40); else playNote(65, 40);
+    delay(40);
+  #endif
   
   checkInterface();
   
@@ -240,19 +229,22 @@ void loop()
     switch (state)
     {
       case 0:
-        digitalWrite(MIDIactivityPin,HIGH);
-        MIDIactivityMillis = millis()+25;
-        MIDIactivity = 1;
-        
-        if (incomingByte == 144) // Note On //
-        { 
-          noteOn = 1;
-          state = 1;
-        }
-        else if (incomingByte == 128) // Note Off //
+        if (incomingByte >= 128)
         {
-          noteOn = 0;
-          state = 1;
+          digitalWrite(MIDIactivityPin,HIGH);
+          MIDIactivityMillis = millis()+25;
+          MIDIactivity = 1;
+          
+          if (incomingByte <= 143) // Note Off //
+          {
+            if ((incomingByte-128) == MIDIchannel) noteOn = 0;
+            state = 1;
+          }
+          else if (incomingByte <= 159) // Note On //
+          {
+            if ((incomingByte-144) == MIDIchannel) noteOn = 1;
+            state = 1;
+          }
         }
         break;
         
@@ -313,3 +305,26 @@ ISR(TIMER1_OVF_vect)
   nextSample(4,1);
   nextSample(5,1);
 }
+
+// ======================================================================================= //
+// Checks the RAM left - the ATmega328 has only 2K of RAM //
+#if SHOWFREEMEM
+  extern unsigned int __data_start;
+  extern unsigned int __data_end;
+  extern unsigned int __bss_start;
+  extern unsigned int __bss_end;
+  extern unsigned int __heap_start;
+  extern void *__brkval;
+  
+  int freeMemory()
+  {
+    int free_memory;
+  
+    if((int)__brkval == 0)
+       free_memory = ((int)&free_memory) - ((int)&__bss_end);
+    else
+      free_memory = ((int)&free_memory) - ((int)__brkval);
+  
+    return free_memory;
+  }
+#endif

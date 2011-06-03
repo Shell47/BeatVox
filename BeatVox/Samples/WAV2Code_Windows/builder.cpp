@@ -91,7 +91,7 @@ int main(int argc, char* argv[])
 	// Clear .c file first //
 	FILE *fdwrite;
 	fdwrite = fopen("PCM_Sound.h","wb");
-	fprintf(fdwrite,"#include <binary.h>\n\n");
+	//fprintf(fdwrite,"#include <binary.h>\n\n");
 	fclose(fdwrite);
 
 	// check for Files //
